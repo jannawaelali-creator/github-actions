@@ -63,7 +63,7 @@ jobs:
         # This is the key verification step in the CI workflow.
         run: python -m unittest discover -s tests -v
 
-
+ # run trivy scan for docker fie and file system
 
       - name: Run Trivy Filesystem Scan (SCA)
         uses: aquasecurity/trivy-action@v0.36.0
