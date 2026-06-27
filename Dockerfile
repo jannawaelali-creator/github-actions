@@ -6,4 +6,7 @@ COPY app ./app
 
 EXPOSE 8000
 
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup
+USER appuser
+
 CMD ["python", "app/app.py"]
