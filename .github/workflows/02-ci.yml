@@ -22,11 +22,28 @@ jobs:
         # Download the repository contents onto the runner.
         uses: actions/checkout@v6
 
+      - name: Validate Repository Checkout
+        # Verification: List files to prove the code is present on the runner.
+        run: |
+          echo "=== Verifying Checked Out Files ==="
+          ls -la
+          echo "Checking for app and tests directories..."
+          ls -d app tests 
+
       - name: Set up Python
         # Prepare Python on the runner. This does not change the student laptop.
         uses: actions/setup-python@v6
         with:
           python-version: "3.12"
+
+      - name: Validate Python and Dependencies Environment
+        # Verification: Check python, pip, and what packages are installed.
+        run: |
+          echo "=== Verifying Python Environment ==="
+          python --version
+          pip --version
+          echo "=== Installed Packages ==="
+          pip list  
 
       - name: Run tests
         # This is the key verification step in the CI workflow.
