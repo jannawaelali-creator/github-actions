@@ -11,11 +11,11 @@ on:
 
 env:
   IMAGE_NAME: tiny-health-app
-  IMAGE_TAR_PREFIX: tiny-health-app
-  IMAGE_METADATA_PREFIX: image-metadata
-  ARTIFACT_NAME_PREFIX: tiny-health-app-image
-  CONTAINER_NAME_PREFIX: tiny-health-container
-  APP_PORT_BASE: 8000
+  IMAGE_TAR: tiny-health-app.tar
+  IMAGE_METADATA: image-metadata.env
+  ARTIFACT_NAME: tiny-health-app-image
+  CONTAINER_NAME: tiny-health-container
+  APP_PORT: "8000"
 
 permissions:
   # Read access is enough because this workflow only downloads artifacts and reads repo data.
@@ -28,60 +28,54 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
     # Use a fresh runner for the deployment simulation.
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
 
     steps:
       - name: Download build artifact
-        # Download the unique matrix-based artifact produced by the build run.
+        # Download the exact artifact produced by the build run.
         uses: actions/download-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME_PREFIX }}-py${{ matrix.python-version }}
+          name: ${{ env.ARTIFACT_NAME }}
           github-token: ${{ github.token }}
           repository: ${{ github.repository }}
           run-id: ${{ github.event.workflow_run.id }}
-          path: downloaded-artifact-${{ matrix.python-version }}
+          path: downloaded-artifact
 
       - name: Show downloaded files
-        run: ls -R downloaded-artifact-${{ matrix.python-version }}
+        # Quick visibility step so students can see what arrived from the build.
+        run: ls -R downloaded-artifact
 
       - name: Load Docker image
-        # Turn the saved matrix artifact file back into a Docker image.
-        run: docker load --input "downloaded-artifact-${{ matrix.python-version }}/${{ env.IMAGE_TAR_PREFIX }}-${{ matrix.python-version }}.tar"
+        # Turn the saved artifact file back into a Docker image.
+        run: docker load --input "downloaded-artifact/${IMAGE_TAR}"
 
       - name: Read image metadata from build artifact
+        # Read the exact built image reference that the build workflow saved.
         id: image-metadata
         run: |
-          source "downloaded-artifact-${{ matrix.python-version }}/${{ env.IMAGE_METADATA_PREFIX }}-${{ matrix.python-version }}.env"
+          source "downloaded-artifact/${IMAGE_METADATA}"
           echo "image_tag=${IMAGE_TAG}" >> "$GITHUB_OUTPUT"
           echo "image_reference=${IMAGE_REFERENCE}" >> "$GITHUB_OUTPUT"
 
       - name: Show exact image reference
-        # REQUIREMENT: Show the exact date-plus-run-id image tag the workflow recreates.
-        run: |
-          echo "Deploying Reference: ${{ steps.image-metadata.outputs.image_reference }}"
-          echo "Recreated Image Tag: ${{ steps.image-metadata.outputs.image_tag }}"
+        # Visibility step so students can see what exact package is being delivered.
+        run: echo "Deploying ${{ steps.image-metadata.outputs.image_reference }}"
 
       - name: Start container
+        # Start the exact same tagged image that the build workflow created.
         run: |
           docker run -d \
-            --name "${{ env.CONTAINER_NAME_PREFIX }}-${{ matrix.python-version }}" \
-            -p "${{ env.APP_PORT_BASE }}:8000" \
+            --name "${CONTAINER_NAME}" \
+            -p "${APP_PORT}:8000" \
             "${{ steps.image-metadata.outputs.image_reference }}"
 
-      - name: Inspect running containers
-        # REQUIREMENT: After startup, show the running containers with docker ps
+      - name: Show running containers
         run: docker ps
 
-      - name: Smoke test and inspect deployed app
-        # REQUIREMENT: Print the /health response body
+      - name: Smoke test deployed app
+        # Retry a few times because app startup can take a moment.
         run: |
           for attempt in 1 2 3 4 5; do
-            if curl --fail --silent "http://127.0.0.1:${{ env.APP_PORT_BASE }}/health"; then
-              echo "--- /health Response Body ---"
-              curl --silent "http://127.0.0.1:${{ env.APP_PORT_BASE }}/health"
-              echo -e "\n-----------------------------"
+            if curl --fail --silent "http://127.0.0.1:${APP_PORT}/health"; then
               exit 0
             fi
             echo "Waiting for app to become ready..."
@@ -90,6 +84,12 @@ jobs:
           echo "App did not become ready in time."
           exit 1
 
+      - name: Check health endpoint
+        run: |
+          sleep 5
+          curl -s "http://localhost:${APP_PORT}/health"
+
       - name: Stop container
         if: always()
-        run: docker rm -f "${{ env.CONTAINER_NAME_PREFIX }}-${{ matrix.python-version }}" || true
+        # Clean up even if an earlier step fails.
+        run: docker rm -f "${CONTAINER_NAME}" || true
