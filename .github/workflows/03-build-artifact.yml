@@ -50,9 +50,42 @@ jobs:
             -t "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" \
             .
 
+      - name: Run Trivy vulnerability scan on Docker image
+        # Scan the Docker image for vulnerabilities.
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.image_tag }}
+          format: 'table'
+        continue-on-error: true
+
+      - name: Run Trivy vulnerability scan on filesystem
+        # Scan the filesystem for vulnerabilities.
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'table'
+        continue-on-error: true
+
       - name: Save Docker image as artifact file
         # Convert that exact tagged image into a file that can be reused later.
         run: docker save "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" -o "${IMAGE_TAR}"
+
+      - name: Run Trivy vulnerability scan on artifact
+        # Scan the saved artifact for vulnerabilities.
+        uses: aquasecurity/trivy-action@master
+        with:
+          input: ${{ env.IMAGE_TAR }}
+          format: 'sarif'
+          output: 'trivy-artifact-results.sarif'
+        continue-on-error: true
+
+      - name: Upload artifact SARIF
+        if: hashFiles('trivy-artifact-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-artifact-results.sarif
+          category: trivy-artifact
 
       - name: Save image metadata
         # Keep the exact built image reference alongside the tar file.
