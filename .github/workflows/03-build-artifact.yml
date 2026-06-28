@@ -1,110 +1,106 @@
+# This workflow verifies the app, then packages it.
+# The build job depends on the verify job via `needs`,
+# so packaging cannot start until verification passes.
 name: 03 Build Artifact Workflow
-
 on:
+  # Students start this workflow manually from the Actions tab.
   workflow_dispatch:
-
 permissions:
   security-events: write
-
 env:
+  # Keep common image values in one place so the build steps stay readable.
   IMAGE_NAME: tiny-health-app
-  IMAGE_TAR_PREFIX: tiny-health-app
-  IMAGE_METADATA_PREFIX: image-metadata
-  ARTIFACT_NAME_PREFIX: tiny-health-app-image
+  IMAGE_TAR: tiny-health-app.tar
+  IMAGE_METADATA: image-metadata.env
+  ARTIFACT_NAME: tiny-health-app-image
 
 jobs:
-  # PHASE 1: Verification (CI)
+  # ---- PHASE 1: VERIFY ----
   verify:
+    # Use a fresh GitHub-hosted runner to run tests.
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-
+        # Get the repository files onto the runner.
+        uses: actions/checkout@v6
       - name: Set up Python
-        uses: actions/setup-python@v5
+        # Prepare Python so the workflow can run the tests.
+        uses: actions/setup-python@v6
         with:
           python-version: "3.12"
-
       - name: Run tests
+        # This is the verification gate the build job waits on.
         run: python -m unittest discover -s tests -v
 
-  # PHASE 2: Packaging (Runs only after verify succeeds, fans out via matrix)
+  # ---- PHASE 2: BUILD & PACKAGE ----
   build-package:
+    # This job only starts once the verify job completes successfully.
     needs: verify
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.11", "3.12"]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
-
-      # Set up Docker Buildx (Carrying over the EX-05 enhancement)
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
+        # Jobs run on separate runners, so checkout again here.
+        uses: actions/checkout@v6
       - name: Set image tag
+        # Use today's UTC date plus the GitHub run ID.
+        # This keeps the tag easy to explain and still unique for the run.
         id: image-tag
         run: |
           TODAY="$(date -u +%Y-%m-%d)"
-          IMAGE_TAG="${TODAY}-${GITHUB_RUN_ID}-py${{ matrix.python-version }}"
+          IMAGE_TAG="${TODAY}-${GITHUB_RUN_ID}"
           echo "image_tag=$IMAGE_TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Build Docker image with Buildx
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          load: true # Loads the image into the local Docker daemon for subsequent testing/saving
-          tags: ${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.image_tag }}
-          build-args: |
-            PYTHON_VERSION=${{ matrix.python-version }}
-
+      - name: Build Docker image with docker build
+        # Create the packaged application image with one traceable tag.
+        # The deploy workflow will run this exact same tag later.
+        run: |
+          docker build \
+            -t "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" \
+            .
       - name: Run Trivy vulnerability scan on Docker image
-        uses: aquasecurity/trivy-action@master
+        # Scan the Docker image for vulnerabilities.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           image-ref: ${{ env.IMAGE_NAME }}:${{ steps.image-tag.outputs.image_tag }}
           format: 'table'
-          continue-on-error: true
-
+        continue-on-error: true
       - name: Run Trivy vulnerability scan on filesystem
-        uses: aquasecurity/trivy-action@master
+        # Scan the filesystem for vulnerabilities.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
           scan-type: 'fs'
           scan-ref: '.'
           format: 'table'
-          continue-on-error: true
-
+        continue-on-error: true
       - name: Save Docker image as artifact file
-        run: |
-          docker save "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" -o "${{ env.IMAGE_TAR_PREFIX }}-${{ matrix.python-version }}.tar"
-
+        # Convert that exact tagged image into a file that can be reused later.
+        run: docker save "${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}" -o "${IMAGE_TAR}"
       - name: Run Trivy vulnerability scan on artifact
-        uses: aquasecurity/trivy-action@master
+        # Scan the saved artifact for vulnerabilities.
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
-          input: ${{ env.IMAGE_TAR_PREFIX }}-${{ matrix.python-version }}.tar
+          input: ${{ env.IMAGE_TAR }}
           format: 'sarif'
-          output: 'trivy-artifact-results-${{ matrix.python-version }}.sarif'
-          continue-on-error: true
-
+          output: 'trivy-artifact-results.sarif'
+        continue-on-error: true
       - name: Upload artifact SARIF
-        if: hashFiles(format('trivy-artifact-results-{0}.sarif', matrix.python-version)) != ''
-        uses: github/codeql-action/upload-sarif@v3
+        if: hashFiles('trivy-artifact-results.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
         with:
-          sarif_file: trivy-artifact-results-${{ matrix.python-version }}.sarif
-          category: trivy-artifact-${{ matrix.python-version }}
-
+          sarif_file: trivy-artifact-results.sarif
+          category: trivy-artifact
       - name: Save image metadata
+        # Keep the exact built image reference alongside the tar file.
+        # The deploy workflow reads this file later instead of recreating the tag.
         run: |
           IMAGE_REFERENCE="${IMAGE_NAME}:${{ steps.image-tag.outputs.image_tag }}"
-          FILENAME="${{ env.IMAGE_METADATA_PREFIX }}-${{ matrix.python-version }}.env"
-          printf 'IMAGE_TAG=%s\n' "${{ steps.image-tag.outputs.image_tag }}" > "$FILENAME"
-          printf 'IMAGE_REFERENCE=%s\n' "${IMAGE_REFERENCE}" >> "$FILENAME"
-
+          printf 'IMAGE_TAG=%s\n' "${{ steps.image-tag.outputs.image_tag }}" > "${IMAGE_METADATA}"
+          printf 'IMAGE_REFERENCE=%s\n' "${IMAGE_REFERENCE}" >> "${IMAGE_METADATA}"
       - name: Upload build artifact
+        # Store the packaged output so a later workflow can use the exact same package.
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ env.ARTIFACT_NAME_PREFIX }}-py${{ matrix.python-version }}
+          name: ${{ env.ARTIFACT_NAME }}
           path: |
-            ${{ env.IMAGE_TAR_PREFIX }}-${{ matrix.python-version }}.tar
-            ${{ env.IMAGE_METADATA_PREFIX }}-${{ matrix.python-version }}.env
+            ${{ env.IMAGE_TAR }}
+            ${{ env.IMAGE_METADATA }}
           retention-days: 7
