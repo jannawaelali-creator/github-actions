@@ -10,10 +10,10 @@ on:
       - "tests/**"
       - ".github/workflows/02-ci.yml"
 
-  schedule:
-    - cron: '*/30 * * * *'  
-  # Allow a safe manual run before students trigger it with a code change.
-  workflow_dispatch:
+  # schedule:
+  #   - cron: '*/30 * * * *'  
+  # # Allow a safe manual run before students trigger it with a code change.
+  # workflow_dispatch:
 
 # env:
 #   PYTHON_VERSION: "3.12"
